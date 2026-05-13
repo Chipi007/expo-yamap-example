@@ -1,50 +1,437 @@
-# Welcome to your Expo app 👋
+# Expo + react-native-yamap-plus
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Базовый пример интеграции Яндекс.Карт в Expo приложение через библиотеку `react-native-yamap-plus`.
 
-## Get started
+Библиотека предоставляет React Native обертку над нативным Yandex MapKit SDK и позволяет использовать полноценные Яндекс.Карты внутри мобильного приложения.
 
-1. Install dependencies
+Поддерживаются:
 
-   ```bash
-   npm install
-   ```
+- iOS
+- Android
+- Expo (через prebuild)
 
-2. Start the app
+---
 
-   ```bash
-   npx expo start
-   ```
+# Возможности библиотеки
 
-In the output, you'll find options to open the app in a
+`react-native-yamap-plus` поддерживает:
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+- интерактивную карту
+- кастомизацию маркеров
+- управление камерой
+- изменение zoom
+- night mode
+- отображение пользовательской позиции на карте
+- поиск
+- маршруты
+- offline cache
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+---
 
-## Get a fresh project
+# Документация
 
-When you're ready, run:
+GitHub:
+https://github.com/Qudaeo/react-native-yamap-plus
+
+npm:
+https://www.npmjs.com/package/react-native-yamap-plus
+
+---
+
+# Установка
 
 ```bash
-npm run reset-project
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+---
 
-## Learn more
+# Генерация нативных проектов
 
-To learn more about developing your project with Expo, look at the following resources:
+Так как библиотека использует нативный Yandex SDK, она не работает внутри Expo Go.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+Необходимо выполнить:
 
-## Join the community
+```bash
+npx expo prebuild
+```
 
-Join our community of developers creating universal apps.
+После этого Expo создаст:
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- ios
+- android
+
+и подключит все необходимые нативные зависимости.
+
+---
+
+# Запуск проекта
+
+iOS:
+
+```bash
+npx expo run:ios
+```
+
+Android:
+
+```bash
+npx expo run:android
+```
+
+---
+
+# Подключение API ключа через app.config.ts
+
+В проекте API ключ Yandex MapKit подключается автоматически через Expo Config Plugin.
+
+Это позволяет:
+
+- не изменять нативные файлы вручную
+- автоматически прокидывать ключ при `expo prebuild`
+- хранить ключ в одном месте
+- удобно работать с несколькими environment (prod/test/dev)
+
+# app.config.ts
+
+```ts
+import {
+  withAndroidManifest,
+  withAppDelegate,
+  withDangerousMod,
+  withProjectBuildGradle,
+} from "expo/config-plugins";
+
+import fs from "fs/promises";
+import path from "path";
+
+const withYandexMapsLiteAndroid = (config) =>
+  withProjectBuildGradle(config, (config) => {
+    let contents = config.modResults.contents;
+
+    if (!contents.includes("useYandexMapsLite")) {
+      contents = contents.replace(
+        /buildscript\s*\{\s*ext\s*\{/m,
+        `buildscript {\n    ext {\n        useYandexMapsLite = true`,
+      );
+    }
+
+    config.modResults.contents = contents;
+
+    return config;
+  });
+
+const withYandexMapsLiteEnv = (config) => {
+  return withDangerousMod(config, [
+    "ios",
+    async (config) => {
+      const podfilePath = path.join(
+        config.modRequest.platformProjectRoot,
+        "Podfile",
+      );
+
+      const line = `ENV['USE_YANDEX_MAPS_LITE'] = "1"`;
+
+      let podfile = await fs.readFile(podfilePath, "utf8");
+
+      if (!podfile.includes(line)) {
+        podfile = `${line}\n${podfile}`;
+
+        await fs.writeFile(podfilePath, podfile);
+      }
+
+      return config;
+    },
+  ]);
+};
+
+const withYandexMaps = (config) => {
+  const apiKey = "YOUR_API_KEY";
+
+  config = withAndroidManifest(config, (config) => {
+    const androidManifest = config.modResults.manifest;
+
+    const application = androidManifest.application?.[0];
+
+    if (application) {
+      application["meta-data"] = application["meta-data"] || [];
+
+      const existing = application["meta-data"].find(
+        (m) => m.$["android:name"] === "com.yandex.mapkit.api_key",
+      );
+
+      if (existing) {
+        existing.$["android:value"] = apiKey;
+      } else {
+        application["meta-data"].push({
+          $: {
+            "android:name": "com.yandex.mapkit.api_key",
+            "android:value": apiKey,
+          },
+        });
+      }
+    }
+
+    return config;
+  });
+
+  config = withAppDelegate(config, (config) => {
+    let contents = config.modResults.contents;
+
+    if (!contents.includes("import YandexMapsMobile")) {
+      contents = contents.replace(
+        /import React/,
+        `import React
+import YandexMapsMobile`,
+      );
+    }
+
+    if (!contents.includes("YMKMapKit.setApiKey")) {
+      const lines = contents.split("\n");
+
+      let methodStartIndex = -1;
+
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes("didFinishLaunchingWithOptions")) {
+          for (let j = i; j < lines.length && j < i + 5; j++) {
+            if (lines[j].includes("-> Bool {")) {
+              methodStartIndex = j;
+              break;
+            }
+          }
+
+          if (methodStartIndex === -1 && lines[i].includes("{")) {
+            methodStartIndex = i;
+          }
+
+          break;
+        }
+      }
+
+      if (methodStartIndex !== -1) {
+        const indent = lines[methodStartIndex].match(/^(\s*)/)?.[1] || "  ";
+
+        const initCode = `
+${indent}YMKMapKit.setLocale("ru_RU")
+${indent}YMKMapKit.setApiKey("${apiKey}")`;
+
+        lines.splice(methodStartIndex + 1, 0, initCode);
+
+        contents = lines.join("\n");
+      } else {
+        contents = contents.replace(
+          /return super\.application\(application, didFinishLaunchingWithOptions: launchOptions\)/,
+          `
+    YMKMapKit.setLocale("ru_RU")
+    YMKMapKit.setApiKey("${apiKey}")
+
+    return super.application(application, didFinishLaunchingWithOptions: launchOptions)`,
+        );
+      }
+    }
+
+    config.modResults.contents = contents;
+
+    return config;
+  });
+
+  return config;
+};
+
+export default ({ config }) => {
+  let cfg = {
+    ...config,
+
+    name: "expo-yamap-example",
+    slug: "expo-yamap-example",
+    version: "1.0.0",
+    orientation: "portrait",
+    scheme: "expoyamapexample",
+    userInterfaceStyle: "automatic",
+    newArchEnabled: true,
+
+    ios: {
+      supportsTablet: true,
+      bundleIdentifier: "com.expoyamapexample",
+
+      infoPlist: {
+        YMKMapKitApiKey: "YOUR_API_KEY",
+      },
+    },
+
+    android: {
+      package: "com.expoyamapexample",
+      edgeToEdgeEnabled: true,
+      predictiveBackGestureEnabled: false,
+    },
+
+    plugins: ["expo-router", withYandexMaps],
+
+    experiments: {
+      typedRoutes: true,
+      reactCompiler: true,
+    },
+  };
+
+  cfg = withYandexMaps(cfg);
+  cfg = withYandexMapsLiteEnv(cfg);
+  cfg = withYandexMapsLiteAndroid(cfg);
+
+  return cfg;
+};
+```
+
+---
+
+# После изменения app.config.ts
+
+Необходимо заново пересобрать native проекты:
+
+```bash
+npx expo prebuild --clean
+```
+
+iOS:
+
+```bash
+cd ios && pod install && cd ..
+```
+
+---
+
+# Важное замечание
+
+Изменения в `app.config.ts` применяются только после:
+
+```bash
+npx expo prebuild
+```
+
+или
+
+```bash
+npx expo prebuild --clean
+```
+
+Потому что Expo генерирует:
+
+- AndroidManifest.xml
+- AppDelegate.swift
+
+на основе config plugins.
+
+# Инициализация Yandex MapKit
+
+После подключения API ключа необходимо обязательно инициализировать `YamapInstance`.
+
+Без этого карта может отображать только сетку и не загружать тайлы.
+
+Добавьте инициализацию перед использованием `Yamap`.
+
+```tsx
+import { YamapInstance } from "react-native-yamap-plus";
+
+YamapInstance.init("YOUR_API_KEY");
+```
+
+---
+
+# Базовое использование
+
+```tsx
+import { Yamap, Marker } from "react-native-yamap-plus";
+
+YamapInstance.init("YOUR_API_KEY");
+
+<Yamap
+  ref={mapRef}
+  initialRegion={{
+    lat: 51.128207,
+    lon: 71.43042,
+    zoom: 12,
+  }}
+  style={{ flex: 1 }}
+>
+  <Marker
+    point={{
+      lat: 51.128207,
+      lon: 71.43042,
+    }}
+  />
+</Yamap>;
+```
+
+---
+
+# Управление камерой
+
+## Получение позиции камеры
+
+```tsx
+mapRef.current?.getCameraPosition((position) => {
+  console.log(position);
+});
+```
+
+## Изменение zoom
+
+```tsx
+mapRef.current?.setZoom(14, 0);
+```
+
+## Перемещение камеры
+
+```tsx
+mapRef.current?.setCenter(
+  {
+    lat: 51.128207,
+    lon: 71.43042,
+  },
+  14,
+  300,
+  false,
+  false,
+);
+```
+
+---
+
+# Маркеры
+
+```tsx
+<Marker
+  point={{
+    lat: 51.128207,
+    lon: 71.43042,
+  }}
+/>
+```
+
+---
+
+# Особенности iOS
+
+На iOS Yandex MapKit иногда может некорректно инициализироваться при первом рендере экрана.
+
+Из-за особенностей работы нативного SDK в некоторых случаях карта отображается пустой или появляется только после повторного рендера.
+
+Для повышения стабильности в проекте используется небольшая задержка перед монтированием компонента `Yamap` через `setTimeout`.
+
+Также в некоторых случаях помогает ограничение высоты карты вместо использования полного `screenHeight`.
+
+```tsx
+height: IS_IOS ? 800 : screenHeight;
+```
+
+---
+
+# Важные замечания
+
+- Библиотека использует нативный Yandex MapKit SDK
+- Expo Go не поддерживается
+- Требуется `expo prebuild`
+- После изменения нативных настроек рекомендуется выполнять:
+
+```bash
+npx expo prebuild --clean
+```
